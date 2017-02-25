@@ -1,6 +1,10 @@
-import java.io.*;
+
+import java.io.BufferedReader;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.*;
-import topkutils.*;
 
 class IdAttribute{
 	double id;
@@ -25,6 +29,7 @@ class IdAttribute{
 		return String.valueOf(this.id) + " " + String.valueOf(this.attribute);
 	}
 }
+
 
 class IdAttributeSort implements Comparator<IdAttribute>{
 
@@ -60,7 +65,6 @@ class Tuple implements Comparable<Tuple>{
 	public int compareTo(Tuple o){
 		return this.threshold.compareTo(o.threshold);
 	}
-
 	public Double computeThreshold(Double V[]){
 		threshold = 0d;
 		int n = V.length;
@@ -69,7 +73,6 @@ class Tuple implements Comparable<Tuple>{
 		}
 		return threshold;
 	}
-
 	public Double getThreshold() {
 		return threshold;
 	}
@@ -87,13 +90,22 @@ class Tuple implements Comparable<Tuple>{
 
 
 public class TopK {
+    /*
+    * outerList: list of key-(attribute_value) pairs for every attribute in CSV file except for the first attribute
+    * Note: the first attribute is assumed to be primary key
+    * */
 	List<List<IdAttribute>> outerList = new ArrayList<List<IdAttribute>>();
-	List<BTree<Double, Double>> btreeList = new ArrayList<BTree<Double,Double>>();
-	List<Tuple> table = new ArrayList<Tuple>();
+    /*
+    * table : abstraction for CSV file
+    * */
+	HashMap<Double,Tuple> table = new HashMap<Double,Tuple>();
+    /*
+    * V : array of values associated with every attribute, used in scoring function
+    * */
 	Double V[];
-	int n,rows,k;
-	public TopK(int n, int k, Double V[]){
-		this.n = n;
+	int arity,rows,k;
+	public TopK(int arity, int k, Double V[]){
+		this.arity = arity;
 		this.k = k;
 		this.V = V;
 	}
@@ -105,18 +117,16 @@ public class TopK {
 		else{
 			if(t.getThreshold()>pq.peek().getThreshold()){
 				pq.poll();
+				//System.out.println(t.getThreshold());
 				pq.offer(t);
 			}
 		}
 	}
 	
 	private Tuple createTuple(Double id){
-		Double attribute[] = new Double[n];
-		int i=0;
-		for(Iterator<BTree<Double, Double>> it = btreeList.iterator();it.hasNext();){
-			attribute[i++] = it.next().get(id);
-		}
-		return new Tuple(id,attribute,V);
+		Tuple t = table.get(id);
+        t.computeThreshold(V);
+		return t;
 	}
 	
 	private Double computeThreshold(Double attribute[]){
@@ -131,40 +141,35 @@ public class TopK {
 	private boolean indexCreation(String inputFile){		
 		BufferedReader inputBufferedReader = null;
 		FileReader fr = null;
-		String inputLine = null;
-		String splitRegex = null;
+		String inputLine = "";
+        String splitRegex = ",";
 		
 		
 		try {
 			fr = new FileReader(inputFile);
 			inputBufferedReader = new BufferedReader(fr);
-			String headerLine = inputBufferedReader.readLine();
-			int headerSplitLength = headerLine.split(",").length;
-			for(int i=0;i<headerSplitLength-1;i++){
+			inputBufferedReader.readLine();                         // Ignore the names of columns
+			for(int i = 0; i< arity; i++){
 				List<IdAttribute> tempList = new ArrayList<IdAttribute>();
 				outerList.add(tempList);
 			}
-			
-			
+
+
 			rows = 0;
 			for(;(inputLine=inputBufferedReader.readLine())!=null;rows++) {
 				String[] lineSplit = inputLine.split(splitRegex);
-				Double attrValues[] = new Double[n];
+				Double attrValues[] = new Double[arity];
+                Double key = Double.valueOf(lineSplit[0]);
 				for(int i=0;i<outerList.size();i++){					
 					attrValues[i] = Double.valueOf(lineSplit[i+1]);
-					outerList.get(i).add(new IdAttribute(Double.valueOf(lineSplit[0]),Double.valueOf(lineSplit[i+1])));
+					outerList.get(i).add(new IdAttribute(key,Double.valueOf(lineSplit[i+1])));
 				}				
-				table.add(new Tuple(Double.valueOf(lineSplit[0]), attrValues));
-				
+				table.put(key,new Tuple(key, attrValues));
 			}
-			
+
+			IdAttributeSort sortObj = new IdAttributeSort();
 			for(List<IdAttribute> tempList:outerList){
-				Collections.sort(tempList,new IdAttributeSort());
-				BTree<Double, Double> tempBtree = new BTree<Double, Double>();
-				for(IdAttribute idAttribute: tempList){
-					tempBtree.put(idAttribute.id, idAttribute.attribute);
-				}
-				btreeList.add(tempBtree);
+				Collections.sort(tempList,sortObj);
 			}
 			
 			
@@ -183,13 +188,15 @@ public class TopK {
 				} catch (IOException e) {
 					System.out.println("IOException in closing inputBufferedReader");
 					e.printStackTrace();
+                    return false;
 				}
 			}
 			try{
 				fr.close();
 			}
 			catch(Exception e){
-				
+                e.printStackTrace();
+                return false;
 			}
 		}		
 		return true;
@@ -197,6 +204,7 @@ public class TopK {
 	
 	public void init(String fileName){
 		if(!indexCreation(fileName)){
+            System.out.println("Couldn't create indexes on file (Bad CSV file)");
 			System.exit(0);
 		}
 	}
@@ -205,8 +213,8 @@ public class TopK {
 		PriorityQueue<Tuple> result = new PriorityQueue<Tuple>();
 		
 		Tuple cur = null;
-		for(int i=0;i<rows;i++){
-			cur = table.get(i);
+        for(Map.Entry<Double,Tuple> entry : table.entrySet()){
+			cur = entry.getValue();
 			//System.out.println(cur);
 			cur.computeThreshold(V);
 			//System.out.println(cur);
@@ -220,39 +228,36 @@ public class TopK {
 	}
 	
 	public Stack<Tuple> thresholdAlgo(){
-
-		PriorityQueue<Tuple> result = new PriorityQueue<Tuple>();		
+		PriorityQueue<Tuple> result = new PriorityQueue<>();
+        HashSet<Double> keysSoFar = new HashSet<>();
 		IdAttribute curRecord = null;
 		Double threshold = 0d;
-		HashSet<Double> newKeys = new HashSet<Double>();
-		Double attrValues[] = new Double[n];
+		Double attrValues[] = new Double[arity];
 		//Threshold Algorithm 
 		for(int i=0;i<rows;i++){
-			if(result.size()>=k && result.peek().getThreshold()>= threshold){
-				break;
-			}
 			int j=0;
 			for(Iterator<List<IdAttribute>> listIterator = outerList.iterator();listIterator.hasNext();j++){
 				curRecord = listIterator.next().get(i);
-				attrValues[j] = curRecord.getAttribute();				
-				newKeys.add(curRecord.getId());
+				attrValues[j] = curRecord.getAttribute();
+                double id =  curRecord.getId();
+                if(!keysSoFar.contains(id)) {
+                    Tuple curTuple = createTuple(id);
+                    if(result.size()>=k){
+                        if(result.peek().getThreshold()<curTuple.getThreshold()){
+                            result.poll();
+                            result.offer(curTuple);
+                        }
+                    }
+                    else{
+                        result.offer(curTuple);
+                    }
+                    keysSoFar.add(curRecord.getId());
+                }
 			}
 			threshold = computeThreshold(attrValues);
-			for(Iterator<Double> newKeysIterator = newKeys.iterator();newKeysIterator.hasNext();){
-				Double id = newKeysIterator.next();
-				Tuple curTuple = createTuple(id);
-				if(!result.contains(curTuple)){
-					if(result.size()>=k){
-						if(result.peek().getThreshold()<curTuple.getThreshold()){
-							result.poll();
-							result.offer(curTuple);
-						}
-					}
-					else{
-						result.offer(curTuple);
-					}
-				}
-			}
+            if(result.size()>=k && result.peek().getThreshold()>= threshold){
+                break;
+            }
 		}	
 		Stack<Tuple> s = new Stack<Tuple>();
 		while(!result.isEmpty()){			
@@ -263,69 +268,70 @@ public class TopK {
 	
 	public void printStack(Stack<Tuple> s){
 		while(!s.isEmpty()){
-			System.out.println(s.pop());
+            System.out.println(s.pop());
 		}
 	}
 		
-	public void printTable(){
-		for(Iterator<Tuple> it = table.iterator();it.hasNext();){
-			System.out.println(it.next());
-		}
-	}
-	
-	public static void main(String[] args) {			
-			
-			BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-			String input = null,fileName = null;			
-			int k = Integer.parseInt(args[0]);
-			int n = Integer.parseInt(args[1]);
-			Double V[] = new Double[n];
-			
-			System.out.print("TopK>");
-			try{
-				input = br.readLine();
-			}
-			catch(IOException e){
-				System.out.println("Error caught while taking input from user");
-				System.exit(0);
-			}
-			String temp[] = input.split(" ");
-			if(temp==null || temp.length!=2 || !temp[0].equalsIgnoreCase("init")){				
-				System.out.println("Invalid Input "+temp.length);
-				System.exit(0);
-			}
-			fileName = temp[1];
-			System.out.print("TopK>");
-			try{
-				input = br.readLine();
-			}
-			catch(IOException e){
-				System.out.println("Error caught while taking input from user");
-				System.exit(0);
-			}
-			temp = input.split(" ");
-			if(temp==null || temp.length!=(n+1) ){
-				System.out.println("Invalid Input "+temp.length);
-				System.exit(0);
-			}			
-			
-			for(int i=1;i<=n;i++){
-				V[i-1]=Double.parseDouble(temp[i]);
-			}
-			
-			TopK obj = new TopK(n,k,V);
-			//INIT FUNCTION INVOKED
-			obj.init(fileName);
-			if(temp[0].equalsIgnoreCase("run1")){
-				obj.printStack(obj.thresholdAlgo());
-			}
-			else if(temp[0].equalsIgnoreCase("run2")){ 
-				obj.printStack(obj.naiveAlgo());
-			}
-			else{
-				System.out.println("Invalid Input "+temp.length);
-				System.exit(0);
-			}
-		}
+	public static void main(String[] args) {
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+        String input = null,fileName = null;
+        int k = Integer.parseInt(args[0]);                  // k -> top k tuples to retrieve
+        int n = Integer.parseInt(args[1]);                  // arity -> total number of columns in CSV file
+        Double V[] = new Double[n];
+
+        System.out.print("TopK>");
+        try{
+            /*
+            * accepts one of the three possible inputs:
+            * init filename
+            * run1 v1 v2... vn                      //Threshhold Algorithm
+            * run2 v1 v2... vn                      // Naive Algorithm
+            * */
+            input = br.readLine();
+        }
+        catch(IOException e){
+            System.out.println("Error caught while taking input from user");
+            System.exit(0);
+        }
+        String temp[] = input.split(" ");
+        if(temp==null || temp.length!=2 || !temp[0].equalsIgnoreCase("init")){
+            System.out.println("Invalid Input "+temp.length);
+            System.exit(0);
+        }
+        fileName = temp[1];
+        System.out.print("TopK>");
+        try{
+            input = br.readLine();
+        }
+        catch(IOException e){
+            System.out.println("Error caught while taking input from user");
+            System.exit(0);
+        }
+        temp = input.split(" ");
+        if(temp==null || temp.length!=(n+1) ){
+            System.out.println("Invalid Input ->"+temp.length);
+            System.exit(0);
+        }
+
+        for(int i=1;i<=n;i++){
+            V[i-1]=Double.parseDouble(temp[i]);
+        }
+
+        TopK obj = new TopK(n,k,V);
+        //INIT FUNCTION INVOKED
+        obj.init(fileName);
+
+        if(temp[0].equalsIgnoreCase("run1")){
+            obj.printStack(obj.thresholdAlgo());
+        }
+        else if(temp[0].equalsIgnoreCase("run2")){
+            obj.printStack(obj.naiveAlgo());
+        }
+        else{
+            System.out.println("Invalid Input "+temp.length);
+            System.exit(0);
+        }
+    }
 }
 
