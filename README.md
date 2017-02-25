@@ -6,6 +6,7 @@ F(A1, . . . , AN) = vi ∗ Ai for all i ranging from 1 to N
 Implemented a Naive solution and Threshold Solution for the same.
 
 Instructions to run the program:
+
 1. Program arguments:
 "k n"
 where k: number of top k records to be retrieved
